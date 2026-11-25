@@ -184,6 +184,17 @@ export default function App() {
   const handleResetProgress = async () => {
     setAttempts({});
     setViolations([]);
+    try {
+      const prefix = `tka_session_timer_${studentId || 'anon'}_`;
+      for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(prefix)) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch {
+      // Ignore storage restriction
+    }
     if (studentId) {
       await fetch(`/api/students/${encodeURIComponent(studentId)}/progress`, {
         method: 'DELETE',
@@ -237,7 +248,7 @@ export default function App() {
       : undefined;
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+    <div className="min-h-screen flex flex-col bg-slate-100 text-slate-900">
       <TopNav
         activeView={activeView}
         onNavigate={setActiveView}
@@ -305,7 +316,7 @@ export default function App() {
 
       <footer className="border-t border-slate-200 bg-white py-4 px-6 text-xs text-slate-400">
         <div className="mx-auto max-w-[1200px] flex items-center justify-between">
-          <span>Numerasi Quest · Latihan Matematika SD Kelas 6</span>
+          <span>TKA Numerasi SD · Latihan Matematika Kelas 6</span>
           <button
             type="button"
             onClick={() => setActiveView('teacher')}

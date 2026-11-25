@@ -138,7 +138,7 @@ export const AiScaffoldPanel: React.FC<AiScaffoldPanelProps> = ({
   ];
 
   return (
-    <aside className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
+    <aside className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}

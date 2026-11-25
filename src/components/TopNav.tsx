@@ -16,17 +16,17 @@ export const TopNav: React.FC<TopNavProps> = ({
   onPrimaryAction,
 }) => {
   const navItems: { id: ActiveView; label: string }[] = [
-    { id: 'map', label: 'Peta Dunia' },
+    { id: 'map', label: 'Daftar Numerasi' },
     { id: 'stats', label: 'Rekap Nilai' },
     { id: 'teacher', label: 'Mode Guru' },
   ];
 
   const ctaLabel =
     activeView === 'quiz'
-      ? 'Kembali ke Peta'
+      ? 'Daftar Numerasi'
       : hasActiveSession
-        ? 'Lanjut Belajar'
-        : 'Mulai Belajar';
+        ? 'Lanjut Latihan'
+        : 'Mulai Latihan';
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-sm">
@@ -36,7 +36,7 @@ export const TopNav: React.FC<TopNavProps> = ({
           onClick={() => onNavigate('map')}
           className="text-left text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 rounded"
         >
-          Numerasi Quest
+          TKA Numerasi SD
         </button>
 
         <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600">

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Award, CheckCircle2, Search, ShieldAlert, Trash2, Trophy } from 'lucide-react';
+import { MINUTES_PER_QUESTION } from '../data/questions';
 import { AttemptRecord, Question, ViolationLog, WorldChapter } from '../types/quiz';
 
 interface LeaderboardRow {
@@ -82,11 +83,11 @@ export const LeaderboardAndStats: React.FC<LeaderboardAndStatsProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="rounded-xl border border-slate-200 bg-white p-5">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>Total XP Terkumpul</span>
+            <span>Total Skor Terkumpul</span>
             <Award className="h-4 w-4 text-sky-600" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-slate-950 tabular-nums">
-            {totalXp} <span className="text-sm font-normal text-slate-400">/ {maxXp} XP</span>
+            {totalXp} <span className="text-sm font-normal text-slate-400">/ {maxXp} poin</span>
           </div>
         </div>
 
@@ -102,7 +103,7 @@ export const LeaderboardAndStats: React.FC<LeaderboardAndStatsProps> = ({
 
         <div className="rounded-xl border border-slate-200 bg-white p-5">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>Soal Cari Kesalahan</span>
+            <span>Soal Analisis Kesalahan</span>
             <Search className="h-4 w-4 text-amber-600" />
           </div>
           <div className="mt-2 font-mono text-2xl font-bold text-slate-950 tabular-nums">
@@ -121,29 +122,31 @@ export const LeaderboardAndStats: React.FC<LeaderboardAndStatsProps> = ({
         </div>
       </div>
 
-      {/* Per-World Table */}
+      {/* Per-Package Table */}
       <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
         <div className="border-b border-slate-200 px-6 py-4">
-          <h2 className="text-base font-bold text-slate-950">Rincian Penguasaan per Dunia</h2>
+          <h2 className="text-base font-bold text-slate-950">Rincian Hasil per Paket Soal</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-50 text-xs font-semibold text-slate-600 border-b border-slate-200">
               <tr>
-                <th className="px-6 py-3">Dunia / Bab</th>
+                <th className="px-6 py-3">Paket Soal</th>
+                <th className="px-6 py-3">Durasi Sesi</th>
                 <th className="px-6 py-3">Terjawab</th>
                 <th className="px-6 py-3">Benar</th>
-                <th className="px-6 py-3">XP Diraih</th>
+                <th className="px-6 py-3">Skor</th>
                 <th className="px-6 py-3">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {chapters.map((ch) => {
-                const worldQs = questions.filter((q) => q.chapterId === ch.id);
-                const worldAttempts = worldQs.map((q) => attempts[q.id]).filter(Boolean);
-                const worldCorrect = worldAttempts.filter((a) => a.isCorrect).length;
-                const worldXp = worldAttempts.reduce((sum, a) => sum + a.earnedXp, 0);
-                const worldMax = worldQs.reduce((sum, q) => sum + q.xp, 0);
+                const pkgQs = questions.filter((q) => q.chapterId === ch.id);
+                const pkgAttempts = pkgQs.map((q) => attempts[q.id]).filter(Boolean);
+                const pkgCorrect = pkgAttempts.filter((a) => a.isCorrect).length;
+                const pkgScore = pkgAttempts.reduce((sum, a) => sum + a.earnedXp, 0);
+                const pkgMax = pkgQs.reduce((sum, q) => sum + q.xp, 0);
+                const pkgMinutes = pkgQs.length * MINUTES_PER_QUESTION;
 
                 return (
                   <tr key={ch.id} className="hover:bg-slate-50/70">
@@ -151,19 +154,22 @@ export const LeaderboardAndStats: React.FC<LeaderboardAndStatsProps> = ({
                       <div className="font-semibold text-slate-900">{ch.orderLabel}: {ch.title}</div>
                       <div className="text-xs text-slate-500">{ch.subtitle}</div>
                     </td>
+                    <td className="px-6 py-3.5 font-mono tabular-nums text-xs text-slate-600">
+                      {pkgMinutes} menit
+                    </td>
                     <td className="px-6 py-3.5 font-mono tabular-nums text-slate-700">
-                      {worldAttempts.length} / {worldQs.length}
+                      {pkgAttempts.length} / {pkgQs.length}
                     </td>
                     <td className="px-6 py-3.5 font-mono tabular-nums text-emerald-700 font-semibold">
-                      {worldCorrect}
+                      {pkgCorrect}
                     </td>
                     <td className="px-6 py-3.5 font-mono tabular-nums text-sky-700 font-semibold">
-                      {worldXp} / {worldMax}
+                      {pkgScore} / {pkgMax}
                     </td>
                     <td className="px-6 py-3.5 text-xs">
-                      {worldAttempts.length === 0 ? (
+                      {pkgAttempts.length === 0 ? (
                         <span className="text-slate-400">Belum dimulai</span>
-                      ) : worldAttempts.length === worldQs.length ? (
+                      ) : pkgAttempts.length === pkgQs.length ? (
                         <span className="font-semibold text-emerald-700">Selesai</span>
                       ) : (
                         <span className="font-semibold text-amber-700">Sedang Berlangsung</span>
@@ -185,7 +191,7 @@ export const LeaderboardAndStats: React.FC<LeaderboardAndStatsProps> = ({
               <Trophy className="h-4.5 w-4.5 text-amber-600" />
               <h2 className="text-base font-bold text-slate-950">Papan Peringkat Kelas</h2>
             </div>
-            <span className="text-xs text-slate-500">Urutan berdasarkan XP terbanyak</span>
+            <span className="text-xs text-slate-500">Urutan berdasarkan skor tertinggi</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -195,7 +201,7 @@ export const LeaderboardAndStats: React.FC<LeaderboardAndStatsProps> = ({
                   <th className="px-6 py-3">Nama Siswa</th>
                   <th className="px-6 py-3">Kelas</th>
                   <th className="px-6 py-3">Soal Benar</th>
-                  <th className="px-6 py-3">Total XP</th>
+                  <th className="px-6 py-3">Total Skor</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -215,7 +221,7 @@ export const LeaderboardAndStats: React.FC<LeaderboardAndStatsProps> = ({
                         {row.correctCount} / {row.attemptCount}
                       </td>
                       <td className="px-6 py-3 font-mono tabular-nums font-bold text-sky-700">
-                        {row.totalXp} XP
+                        {row.totalXp} poin
                       </td>
                     </tr>
                   );

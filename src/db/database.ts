@@ -9,6 +9,7 @@ import type {
   ChapterId,
   QuestionOverride,
   StudentSummary,
+  TeacherViolationEntry,
   ViolationLog,
 } from '../types/quiz.ts';
 
@@ -35,7 +36,7 @@ function getPgPool(): Pool {
 
     pgPool = new Pool({
       connectionString: POSTGRES_CONNECTION_STRING,
-      max: 10,
+      max: 5,
       connectionTimeoutMillis: 15000,
       ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
     });
@@ -158,13 +159,20 @@ async function ensureInitialized(): Promise<void> {
         [now]
       );
 
-      // Seed Grade 6 roster idempotently
-      for (const stu of GRADE_6_ROSTER) {
+      // Seed Grade 6 roster idempotently in a single batched query (fast on Vercel cold starts)
+      if (GRADE_6_ROSTER.length > 0) {
+        const values: string[] = [];
+        const params: string[] = [now];
+        GRADE_6_ROSTER.forEach((stu, i) => {
+          const offset = i * 3 + 2;
+          values.push(`($${offset}, $${offset + 1}, $${offset + 2}, 'bab1', 0, 1, $1, $1)`);
+          params.push(stu.id, stu.name, stu.className);
+        });
         await pool.query(
           `INSERT INTO students (id, name, class_name, active_chapter_id, is_session_locked, has_completed_onboarding, created_at, updated_at)
-           VALUES ($1, $2, $3, 'bab1', 0, 1, $4, $4)
+           VALUES ${values.join(', ')}
            ON CONFLICT (id) DO NOTHING`,
-          [stu.id, stu.name, stu.className, now]
+          params
         );
       }
       return;
@@ -930,6 +938,64 @@ export async function getLeaderboard(limit = 100): Promise<StudentSummary[]> {
     violationCount: Number(r.violationCount) || 0,
     updatedAt: r.updatedAt,
   }));
+}
+
+export async function getAllViolationLogs(limit = 250): Promise<TeacherViolationEntry[]> {
+  await ensureInitialized();
+  let rows: Array<{
+    id: string;
+    studentId: string;
+    studentName: string;
+    studentClass: string;
+    type: ViolationLog['type'];
+    detail: string;
+    chapterTitle: string;
+    questionLabel: string;
+    timestamp: string;
+  }> = [];
+
+  if (isPostgresMode()) {
+    const res = await getPgPool().query(
+      `SELECT
+         v.id,
+         v.student_id AS "studentId",
+         s.name AS "studentName",
+         s.class_name AS "studentClass",
+         v.type,
+         v.detail,
+         v.chapter_title AS "chapterTitle",
+         v.question_label AS "questionLabel",
+         v.timestamp_label AS "timestamp"
+       FROM violation_logs v
+       JOIN students s ON s.id = v.student_id
+       ORDER BY v.created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    rows = res.rows;
+  } else {
+    const db = await getSqliteDb();
+    rows = db
+      .prepare(
+        `SELECT
+           v.id,
+           v.student_id AS studentId,
+           s.name AS studentName,
+           s.class_name AS studentClass,
+           v.type,
+           v.detail,
+           v.chapter_title AS chapterTitle,
+           v.question_label AS questionLabel,
+           v.timestamp_label AS timestamp
+         FROM violation_logs v
+         JOIN students s ON s.id = v.student_id
+         ORDER BY v.created_at DESC
+         LIMIT ?`
+      )
+      .all(limit) as typeof rows;
+  }
+
+  return rows;
 }
 
 export async function getScaffoldHistory(studentId: string, questionId: string) {

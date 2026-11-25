@@ -79,28 +79,34 @@ export const OnboardingWelcome: React.FC<OnboardingWelcomeProps> = ({
     {
       num: '1',
       icon: BookOpen,
-      title: 'Pilih Dunia Berurutan',
-      desc: 'Mulai dari Dunia 1 sampai Boss Terakhir. Satu dunia berisi 6–10 soal.',
+      badgeClass: 'bg-sky-600 text-white',
+      borderClass: 'border-sky-200',
+      title: 'Pilih Paket Soal',
+      desc: 'Kerjakan berurutan dari Paket 1 sampai Paket 5B (waktu 3 menit per soal).',
     },
     {
       num: '2',
       icon: PenTool,
-      title: 'Baca Teliti & Hitung',
-      desc: 'Hitung di kertas coretanmu, waspadai angka pengecoh, lalu pilih jawaban terbaik.',
+      badgeClass: 'bg-indigo-600 text-white',
+      borderClass: 'border-indigo-200',
+      title: 'Baca & Hitung Teliti',
+      desc: 'Hitung di kertas coretan terlebih dahulu sebelum memilih jawaban A, B, C, atau D.',
     },
     {
       num: '3',
       icon: CheckCircle2,
-      title: 'Pelajari & Kumpulkan XP',
-      desc: 'Gunakan Petunjuk atau Tutor AI jika bingung. Tetap fokus di halaman ini selama kuis berlangsung.',
+      badgeClass: 'bg-emerald-600 text-white',
+      borderClass: 'border-emerald-200',
+      title: 'Pelajari Pembahasan',
+      desc: 'Periksa langkah penyelesaiannya atau tanya Tutor AI bila masih ragu.',
     },
   ];
 
   return (
-    <div className="min-h-screen flex flex-col justify-between bg-slate-50 px-6 py-10">
-      <div className="mx-auto w-full max-w-2xl flex items-center justify-between">
+    <div className="min-h-screen flex flex-col justify-between bg-slate-100 px-6 py-8">
+      <div className="mx-auto w-full max-w-3xl flex items-center justify-between">
         <span className="text-base font-bold tracking-tight text-slate-900">
-          Numerasi Quest
+          TKA Numerasi SD
         </span>
         <button
           type="button"
@@ -111,50 +117,69 @@ export const OnboardingWelcome: React.FC<OnboardingWelcomeProps> = ({
         </button>
       </div>
 
-      <main className="mx-auto w-full max-w-2xl my-8 rounded-2xl border border-slate-200 bg-white p-7 md:p-10 space-y-8">
-        <div className="space-y-2.5">
-          <p className="text-xs font-semibold text-sky-700">
-            Matematika SD Kelas 6 · Belajar Langkah demi Langkah
+      <main className="mx-auto w-full max-w-3xl my-6 rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+        {/* Band 1: Dark Slate Context Header */}
+        <div className="bg-slate-900 text-white px-7 py-6 md:px-10 md:py-7 space-y-2">
+          <p className="text-xs font-semibold text-sky-300">
+            TKA Numerasi SD Kelas 6 · Persiapan Sesi Latihan
           </p>
-          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-slate-950 [text-wrap:balance]">
-            Halo! Siap Berlatih Hitungan Hari Ini?
+          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white [text-wrap:balance]">
+            Selamat Datang di Latihan TKA Numerasi
           </h1>
-          <p className="text-sm md:text-base text-slate-600 leading-relaxed">
-            Ikuti 3 langkah sederhana di bawah ini sebelum mulai bermain dan belajar.
+          <p className="text-sm md:text-base text-slate-300 leading-relaxed max-w-2xl">
+            Ikuti 3 tahapan tertib di bawah ini agar kamu bisa mengerjakan soal dengan tenang dan fokus.
           </p>
         </div>
 
-        {/* 3 Sequential Steps */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {steps.map((step) => {
-            const Icon = step.icon;
-            return (
-              <div
-                key={step.num}
-                className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-2"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-xs font-bold text-sky-700">
-                    Langkah {step.num}
-                  </span>
-                  <Icon className="h-4 w-4 text-slate-500" />
+        {/* Band 2: Soft Sky-Tinted 3-Stage Sequential Overview */}
+        <div className="bg-sky-50/80 border-b border-sky-200/80 px-7 py-6 md:px-10 space-y-3">
+          <div className="text-xs font-bold text-sky-900">
+            Alur Pengerjaan Sesi (3 Tahap Berurutan)
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+            {steps.map((step) => {
+              const Icon = step.icon;
+              return (
+                <div
+                  key={step.num}
+                  className={`rounded-xl border ${step.borderClass} bg-white p-4 space-y-2`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span
+                      className={`inline-flex h-6 px-2 items-center justify-center rounded-md font-mono text-xs font-bold ${step.badgeClass}`}
+                    >
+                      Tahap {step.num}
+                    </span>
+                    <Icon className="h-4 w-4 text-slate-400" />
+                  </div>
+                  <h2 className="text-sm font-bold text-slate-900">{step.title}</h2>
+                  <p className="text-xs text-slate-600 leading-relaxed">{step.desc}</p>
                 </div>
-                <h2 className="text-sm font-bold text-slate-900">{step.title}</h2>
-                <p className="text-xs text-slate-600 leading-relaxed">{step.desc}</p>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
 
-        {/* Single Clear Initiation Form */}
-        <form onSubmit={handleSubmit} className="space-y-4 pt-2 border-t border-slate-100">
+        {/* Band 3: Crisp White Active Action Form */}
+        <form onSubmit={handleSubmit} className="bg-white px-7 py-7 md:px-10 space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-bold text-slate-950">
+                Langkah Mulai: Pilih Nama Siswa
+              </h2>
+              <p className="text-xs text-slate-500">
+                Cari lalu klik namamu dari {roster.length} siswa Kelas 6 yang terdaftar.
+              </p>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
             <div className="sm:col-span-2 space-y-1.5">
               <label
                 htmlFor="onboarding-search"
-                className="block text-sm font-bold text-slate-900"
+                className="block text-xs font-bold text-slate-700"
               >
-                Cari &amp; Pilih Namamu ({roster.length} Siswa Terdaftar)
+                Cari Nama Siswa
               </label>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -180,7 +205,7 @@ export const OnboardingWelcome: React.FC<OnboardingWelcomeProps> = ({
             <div className="space-y-1.5">
               <label
                 htmlFor="onboarding-class"
-                className="block text-sm font-bold text-slate-900"
+                className="block text-xs font-bold text-slate-700"
               >
                 Kelas
               </label>
@@ -200,7 +225,7 @@ export const OnboardingWelcome: React.FC<OnboardingWelcomeProps> = ({
           </div>
 
           {/* Searchable Student Picker List */}
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-2 max-h-48 overflow-y-auto space-y-1">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-2 max-h-48 overflow-y-auto space-y-1">
             {filteredRoster.length === 0 ? (
               <div className="px-3 py-4 text-center text-xs text-slate-500">
                 Nama tidak ditemukan di daftar. Coba periksa ejaan atau hubungi guru.
@@ -219,7 +244,7 @@ export const OnboardingWelcome: React.FC<OnboardingWelcomeProps> = ({
                       setClassName(stu.className || 'Kelas 6');
                       if (error) setError(null);
                     }}
-                    className={`w-full rounded-lg px-3.5 py-2 text-left text-sm flex items-center justify-between transition-colors ${
+                    className={`w-full rounded-lg px-3.5 py-2.5 text-left text-sm flex items-center justify-between transition-colors ${
                       isSelected
                         ? 'bg-sky-600 text-white font-semibold'
                         : 'bg-white text-slate-800 hover:bg-sky-50 border border-slate-200/70'
@@ -234,10 +259,10 @@ export const OnboardingWelcome: React.FC<OnboardingWelcomeProps> = ({
           </div>
 
           {selectedStudent && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-medium text-emerald-900 flex items-center gap-2">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-medium text-emerald-900 flex items-center gap-2">
               <UserCheck className="h-4 w-4 text-emerald-600 shrink-0" />
               <span>
-                Nama terpilih: <strong>{selectedStudent.name}</strong> ({className})
+                Nama terpilih: <strong>{selectedStudent.name}</strong> ({className}) — siap melanjutkan ke Daftar Numerasi.
               </span>
             </div>
           )}
@@ -247,16 +272,16 @@ export const OnboardingWelcome: React.FC<OnboardingWelcomeProps> = ({
           <button
             type="submit"
             disabled={isSaving}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-6 py-3.5 text-base font-bold text-white hover:bg-sky-700 transition-colors disabled:opacity-60"
+            className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-6 py-4 text-base font-bold text-white hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-60"
           >
-            <span>{isSaving ? 'Menyiapkan Papan Belajar...' : 'Lanjut ke Peta Dunia'}</span>
+            <span>{isSaving ? 'Menyiapkan Sesi Latihan...' : 'Masuk ke Daftar Numerasi'}</span>
             <ArrowRight className="h-4.5 w-4.5" />
           </button>
         </form>
       </main>
 
-      <div className="mx-auto w-full max-w-2xl text-center text-xs text-slate-400">
-        Numerasi Quest · Latihan Terstruktur SD Kelas 6
+      <div className="mx-auto w-full max-w-3xl text-center text-xs text-slate-400">
+        TKA Numerasi SD · Latihan Terstruktur Kelas 6
       </div>
     </div>
   );

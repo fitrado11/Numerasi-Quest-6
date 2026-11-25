@@ -1,10 +1,12 @@
 import 'dotenv/config';
-import express, { NextFunction, Request, Response } from 'express';
+import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
   appendScaffoldTurns,
   clearScaffoldHistory,
   createOrUpdateStudent,
+  getAllViolationLogs,
   getAppSettings,
   getDatabaseEngineInfo,
   getLeaderboard,
@@ -224,14 +226,18 @@ export function createApiApp() {
       if (!pin || pin.trim() !== settings.teacherPin) {
         return res.status(401).json({ valid: false, error: 'PIN Guru salah.' });
       }
-      const [students, overrides] = await Promise.all([
+      const [students, overrides, violationLogs, dbEngine] = await Promise.all([
         getLeaderboard(200),
         getQuestionOverrides(),
+        getAllViolationLogs(250),
+        getDatabaseEngineInfo(),
       ]);
       return res.json({
         valid: true,
         students,
         overrides,
+        violationLogs,
+        dbEngine,
       });
     } catch (err) {
       console.error('Teacher verify error:', err);
@@ -241,11 +247,13 @@ export function createApiApp() {
 
   app.get('/api/teacher/overview', requireTeacherPin, async (_req, res) => {
     try {
-      const [students, overrides] = await Promise.all([
+      const [students, overrides, violationLogs, dbEngine] = await Promise.all([
         getLeaderboard(200),
         getQuestionOverrides(),
+        getAllViolationLogs(250),
+        getDatabaseEngineInfo(),
       ]);
-      return res.json({ students, overrides });
+      return res.json({ students, overrides, violationLogs, dbEngine });
     } catch (err) {
       console.error('Teacher overview error:', err);
       return res.status(500).json({ error: 'Gagal memuat ringkasan guru.' });

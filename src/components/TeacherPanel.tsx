@@ -2,16 +2,24 @@ import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  Database,
   Edit3,
   KeyRound,
   Plus,
   RefreshCw,
   Save,
   Search,
+  ShieldAlert,
   ShieldCheck,
   Users,
 } from 'lucide-react';
-import { Question, StudentSummary, WorldChapter } from '../types/quiz';
+import {
+  Question,
+  StudentSummary,
+  TeacherViolationEntry,
+  ViolationLog,
+  WorldChapter,
+} from '../types/quiz';
 
 interface TeacherPanelProps {
   questions: Question[];
@@ -37,8 +45,14 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
   const [verifying, setVerifying] = useState(false);
 
   const [students, setStudents] = useState<StudentSummary[]>([]);
+  const [violationLogs, setViolationLogs] = useState<TeacherViolationEntry[]>([]);
+  const [dbEngine, setDbEngine] = useState<'postgres' | 'sqlite' | null>(null);
   const [studentSearch, setStudentSearch] = useState('');
   const [studentFilter, setStudentFilter] = useState<'all' | 'active' | 'not-started'>('all');
+  const [behaviorSearch, setBehaviorSearch] = useState('');
+  const [behaviorTypeFilter, setBehaviorTypeFilter] = useState<
+    'all' | 'tab-switch' | 'fullscreen-exit' | 'window-blur' | 'screenshot-copy'
+  >('all');
   const [newStudentName, setNewStudentName] = useState('');
   const [addingStudent, setAddingStudent] = useState(false);
 
@@ -70,6 +84,56 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
     });
   }, [students, studentSearch, studentFilter]);
 
+  const filteredBehaviorLogs = useMemo(() => {
+    const q = behaviorSearch.trim().toLowerCase();
+    return violationLogs.filter((v) => {
+      if (q) {
+        const hay = `${v.studentName} ${v.chapterTitle} ${v.questionLabel} ${v.detail}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (behaviorTypeFilter === 'tab-switch' && v.type !== 'tab-switch') return false;
+      if (behaviorTypeFilter === 'fullscreen-exit' && v.type !== 'fullscreen-exit') return false;
+      if (behaviorTypeFilter === 'window-blur' && v.type !== 'window-blur') return false;
+      if (
+        behaviorTypeFilter === 'screenshot-copy' &&
+        !['screenshot-attempt', 'copy-attempt', 'context-menu', 'shortcut-blocked'].includes(v.type)
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [violationLogs, behaviorSearch, behaviorTypeFilter]);
+
+  const formatViolationTypeLabel = (type: ViolationLog['type']): { label: string; tone: string } => {
+    switch (type) {
+      case 'tab-switch':
+        return {
+          label: 'Ganti Tab / Minimize',
+          tone: 'bg-amber-100 text-amber-900 border-amber-300',
+        };
+      case 'fullscreen-exit':
+        return {
+          label: 'Keluar Layar Penuh',
+          tone: 'bg-rose-100 text-rose-900 border-rose-300',
+        };
+      case 'window-blur':
+        return {
+          label: 'Pindah Fokus / Split-Screen',
+          tone: 'bg-orange-100 text-orange-900 border-orange-300',
+        };
+      case 'screenshot-attempt':
+        return {
+          label: 'Percobaan Screenshot',
+          tone: 'bg-red-100 text-red-900 border-red-300',
+        };
+      default:
+        return {
+          label: 'Salin / Pintasan Diblokir',
+          tone: 'bg-slate-100 text-slate-800 border-slate-300',
+        };
+    }
+  };
+
   const handleTeacherLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginPinInput.trim() || verifying) return;
@@ -89,6 +153,8 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
         setVerifiedPin(cleanPin);
         setPinDraft(cleanPin);
         setStudents(Array.isArray(data.students) ? data.students : []);
+        setViolationLogs(Array.isArray(data.violationLogs) ? data.violationLogs : []);
+        setDbEngine(data.dbEngine === 'postgres' ? 'postgres' : 'sqlite');
         setLoginPinInput('');
       }
     } catch {
@@ -107,6 +173,10 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
       if (!res.ok) return;
       const data = await res.json();
       setStudents(Array.isArray(data.students) ? data.students : []);
+      setViolationLogs(Array.isArray(data.violationLogs) ? data.violationLogs : []);
+      if (data.dbEngine) {
+        setDbEngine(data.dbEngine === 'postgres' ? 'postgres' : 'sqlite');
+      }
       await onRefreshState();
     } catch {
       // Ignore transient refresh errors
@@ -283,6 +353,32 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
         </button>
       </div>
 
+      {/* Database Connection Status Banner */}
+      <div
+        className={`rounded-xl border px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs ${
+          dbEngine === 'postgres'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
+            : 'border-sky-200 bg-sky-50 text-sky-950'
+        }`}
+      >
+        <div className="flex items-center gap-2.5">
+          <Database
+            className={`h-4 w-4 shrink-0 ${
+              dbEngine === 'postgres' ? 'text-emerald-700' : 'text-sky-700'
+            }`}
+          />
+          <span>
+            <strong>Status Database:</strong>{' '}
+            {dbEngine === 'postgres'
+              ? 'PostgreSQL Terhubung (Data siswa, nilai, & log perilaku tersimpan permanen untuk Vercel).'
+              : 'SQLite Lokal (Aktif untuk uji coba lokal. Untuk deploy permanen di Vercel, hubungkan variabel POSTGRES_URL).'}
+          </span>
+        </div>
+        <span className="font-mono font-semibold shrink-0">
+          {violationLogs.length} log perilaku tersimpan
+        </span>
+      </div>
+
       {/* Security & Pedagogy Settings */}
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
@@ -320,19 +416,19 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
           </div>
 
           <p className="text-xs text-slate-500 leading-relaxed pt-1 border-t border-slate-100">
-            Soal otomatis tertutup tirai privasi jika siswa berpindah tab, membuka split-screen, atau menekan tombol tangkapan layar, disertai watermark identitas siswa dan jeda baca 6 detik sebelum mengirim jawaban.
+            Soal otomatis tertutup tirai privasi jika siswa berpindah tab, membuka split-screen, atau menekan tombol tangkapan layar, disertai watermark identitas siswa, jeda baca 6 detik sebelum mengirim jawaban, dan alokasi waktu 3 menit per soal (terakumulasi per paket).
           </p>
         </div>
 
         {/* Summary of Special Pedagogy Rules */}
         <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-3">
-          <div className="text-sm font-bold text-slate-900">Ringkasan Kepatuhan Aturan Kuis</div>
+          <div className="text-sm font-bold text-slate-900">Ringkasan Aturan Sesi TKA Numerasi</div>
           <ul className="space-y-2 text-xs text-slate-600 leading-relaxed">
             <li>
-              <strong className="text-slate-900">Ronde per Bab:</strong> Bab 1–4 sebagai dunia berjenjang; Bab 5 (Versi A: 8 soal, Versi B: 6 soal) sebagai Boss Battle Bridge Unit.
+              <strong className="text-slate-900">Paket &amp; Durasi (3 menit/soal):</strong> Paket 1 (7 soal · 21 menit), Paket 2–4 (10 soal · 30 menit), Paket 5A (8 soal · 24 menit), dan Paket 5B (6 soal · 18 menit).
             </li>
             <li>
-              <strong className="text-slate-900">Soal Pelacak Kesalahan (5 soal):</strong> Soal 2.2, 2.4, 4.6, 5A.5, dan 5B.5 dilengkapi kotak klaim siswa untuk mode <em>Cari Kesalahannya</em>.
+              <strong className="text-slate-900">Soal Analisis Kesalahan (5 soal):</strong> Soal 2.2, 2.4, 4.6, 5A.5, dan 5B.5 dilengkapi pernyataan yang harus diperiksa kesalahannya.
             </li>
             <li>
               <strong className="text-slate-900">Soal Verifikasi Awal (2 soal):</strong> Soal 5A.3 (pola berkas asal rusak <code className="font-mono">4□7,2□5</code>) dan Soal 5B.3 (koreksi anggaran 487 siswa Rp39.398.300 &lt; Rp40.000.000).
@@ -416,7 +512,7 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
                 <th className="px-6 py-3">Nama Siswa</th>
                 <th className="px-6 py-3">Kelas</th>
                 <th className="px-6 py-3">Benar / Dijawab</th>
-                <th className="px-6 py-3">Total XP</th>
+                <th className="px-6 py-3">Total Skor</th>
                 <th className="px-6 py-3">Catatan Fokus / Screenshot</th>
               </tr>
             </thead>
@@ -432,7 +528,7 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
                     {stu.correctCount} / {stu.attemptCount}
                   </td>
                   <td className="px-6 py-3 font-mono tabular-nums font-bold text-sky-700">
-                    {stu.totalXp} XP
+                    {stu.totalXp} poin
                   </td>
                   <td className="px-6 py-3 font-mono tabular-nums text-xs">
                     <span
@@ -449,6 +545,113 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
               ))}
             </tbody>
           </table>
+        </div>
+      </section>
+
+      {/* Catatan Perilaku Siswa (Log Database) */}
+      <section className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+        <div className="border-b border-slate-200 px-6 py-4 space-y-3">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="h-4.5 w-4.5 text-amber-600" />
+              <div>
+                <h2 className="text-base font-bold text-slate-950">
+                  Catatan Perilaku Siswa — Log Database ({violationLogs.length})
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Merekam otomatis saat siswa mengganti tab, memperkecil (minimize) layar, keluar dari layar penuh, atau mencoba tangkapan layar.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+            <div className="relative flex-1 max-w-xs">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+              <input
+                type="text"
+                value={behaviorSearch}
+                onChange={(e) => setBehaviorSearch(e.target.value)}
+                placeholder="Cari nama siswa / nomor soal..."
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 py-1.5 text-xs text-slate-900 focus:border-sky-600 focus:bg-white focus:outline-none"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              {(
+                [
+                  { id: 'all', label: 'Semua' },
+                  { id: 'tab-switch', label: 'Ganti Tab / Minimize' },
+                  { id: 'fullscreen-exit', label: 'Keluar Layar Penuh' },
+                  { id: 'window-blur', label: 'Pindah Fokus' },
+                  { id: 'screenshot-copy', label: 'Screenshot / Salin' },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setBehaviorTypeFilter(tab.id)}
+                  className={`rounded-lg px-2.5 py-1.5 font-semibold transition-colors whitespace-nowrap ${
+                    behaviorTypeFilter === tab.id
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="max-h-96 overflow-y-auto overflow-x-auto">
+          {filteredBehaviorLogs.length === 0 ? (
+            <div className="px-6 py-8 text-center text-xs text-slate-500">
+              {violationLogs.length === 0
+                ? 'Belum ada catatan perpindahan tab, minimize, atau keluar layar penuh yang tercatat di database.'
+                : 'Tidak ada catatan perilaku yang cocok dengan filter pencarian.'}
+            </div>
+          ) : (
+            <table className="w-full text-left text-xs md:text-sm">
+              <thead className="sticky top-0 bg-slate-50 text-xs font-semibold text-slate-600 border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-3 whitespace-nowrap">Waktu</th>
+                  <th className="px-6 py-3">Nama Siswa</th>
+                  <th className="px-6 py-3 whitespace-nowrap">Jenis Catatan</th>
+                  <th className="px-6 py-3 whitespace-nowrap">Paket &amp; Soal</th>
+                  <th className="px-6 py-3">Detail Kejadian</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredBehaviorLogs.map((log) => {
+                  const badge = formatViolationTypeLabel(log.type);
+                  return (
+                    <tr key={log.id} className="hover:bg-slate-50/70">
+                      <td className="px-6 py-3 font-mono text-xs text-slate-500 whitespace-nowrap tabular-nums">
+                        {log.timestamp}
+                      </td>
+                      <td className="px-6 py-3 font-semibold text-slate-900 whitespace-nowrap">
+                        {log.studentName}
+                      </td>
+                      <td className="px-6 py-3 whitespace-nowrap">
+                        <span
+                          className={`inline-block rounded-md border px-2 py-0.5 text-[11px] font-semibold ${badge.tone}`}
+                        >
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3 text-xs text-slate-700 whitespace-nowrap">
+                        {log.chapterTitle} · <span className="font-mono font-semibold">{log.questionLabel}</span>
+                      </td>
+                      <td className="px-6 py-3 text-xs text-slate-600 leading-relaxed min-w-[240px]">
+                        {log.detail}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </section>
 
@@ -485,7 +688,7 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
                   filterChapter === ch.id ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                {ch.orderLabel.replace('Boss Battle · ', 'Bab 5 ')}
+                {ch.orderLabel.replace(' · Evaluasi', '')}
               </button>
             ))}
           </div>
@@ -509,7 +712,7 @@ export const TeacherPanel: React.FC<TeacherPanelProps> = ({
                     <span aria-hidden="true">·</span>
                     <span className="font-semibold text-slate-700">{q.title}</span>
                     <span aria-hidden="true">·</span>
-                    <span className="text-slate-500">Level {q.level} ({q.xp} XP)</span>
+                    <span className="text-slate-500">Tingkat {q.level} ({q.xp} poin)</span>
                     {q.isErrorHunt && (
                       <>
                         <span aria-hidden="true">·</span>

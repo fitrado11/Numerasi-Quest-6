@@ -7,12 +7,13 @@ import {
   HelpCircle,
   Maximize2,
   Minimize2,
+  RotateCcw,
   Search,
   ShieldAlert,
   ShieldCheck,
-  Sparkles,
   XCircle,
 } from 'lucide-react';
+import { MINUTES_PER_QUESTION } from '../data/questions';
 import { AttemptRecord, Question, ViolationLog, WorldChapter } from '../types/quiz';
 import { AiScaffoldPanel } from './AiScaffoldPanel';
 
@@ -35,6 +36,14 @@ interface ShuffledOption {
 }
 
 const MIN_READ_SECONDS = 6;
+const SECONDS_PER_QUESTION = MINUTES_PER_QUESTION * 60; // 3 menit = 180 detik per soal
+
+function formatMmSs(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
 
 function deterministicShuffle(options: string[], seedStr: string): ShuffledOption[] {
   const mapped = options.map((text, idx) => ({ text, originalIndex: idx }));
@@ -64,6 +73,11 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
   onExitToMap,
   onNextWorld,
 }) => {
+  const totalSessionSeconds = questions.length * SECONDS_PER_QUESTION;
+  const timerStorageKey = `tka_session_timer_${studentId || 'anon'}_${chapter.id}`;
+  const allQuestionsAnswered =
+    questions.length > 0 && questions.every((q) => Boolean(attempts[q.id]));
+
   const initialQuestionIndex = useMemo(() => {
     const idx = questions.findIndex((q) => !attempts[q.id]);
     return idx >= 0 ? idx : 0;
@@ -72,7 +86,12 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
   const [currentIndex, setCurrentIndex] = useState(initialQuestionIndex);
   const [roundComplete, setRoundComplete] = useState(false);
 
-  // Per-round power-up budget (1x each per round/world)
+  // Accumulated session timer (3 menit × jumlah soal) + per-question 3-minute pacing timer
+  const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number>(totalSessionSeconds);
+  const [sessionTimedOut, setSessionTimedOut] = useState(false);
+  const [questionSecondsLeft, setQuestionSecondsLeft] = useState<number>(SECONDS_PER_QUESTION);
+
+  // Per-session helper budget (1x each per paket)
   const [hintPowerUpUsedInRound, setHintPowerUpUsedInRound] = useState(false);
   const [fiftyFiftyUsedInRound, setFiftyFiftyUsedInRound] = useState(false);
 
@@ -86,20 +105,69 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
   // Anti-random-guessing read-first timer
   const [readCountdown, setReadCountdown] = useState<number>(MIN_READ_SECONDS);
 
-  // Anti-screenshot & anti-cheat privacy curtain (no lockout!)
+  // Anti-screenshot & anti-cheat privacy curtain & fullscreen focus gate (no permanent lockout)
+  const [hasEnteredFocusGate, setHasEnteredFocusGate] = useState<boolean>(
+    () =>
+      allQuestionsAnswered ||
+      (typeof document !== 'undefined' && Boolean(document.fullscreenElement))
+  );
+  const [focusModeType, setFocusModeType] = useState<'native' | 'window'>(() =>
+    typeof document !== 'undefined' && document.fullscreenElement ? 'native' : 'native'
+  );
+  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
   const [isPrivacyCurtainOpen, setIsPrivacyCurtainOpen] = useState(false);
   const [curtainReason, setCurtainReason] = useState<string>(
     'Layar soal disembunyikan sementara karena fokus berpindah.'
   );
   const [warningToast, setWarningToast] = useState<string | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(() =>
+    typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
+  );
 
-  const lastViolationAtRef = useRef<number>(0);
+  const lastViolationByTypeRef = useRef<Partial<Record<ViolationLog['type'], number>>>({});
+  const wasNativeFullscreenRef = useRef<boolean>(
+    typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
+  );
+  const isUnmountingRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    isUnmountingRef.current = false;
+    return () => {
+      isUnmountingRef.current = true;
+    };
+  }, []);
 
   useEffect(() => {
     const firstOpen = questions.findIndex((q) => !attempts[q.id]);
+    const isAlreadyDone = questions.length > 0 && questions.every((q) => Boolean(attempts[q.id]));
+    let restoredSeconds = totalSessionSeconds;
+    let timedOutOnLoad = false;
+
+    if (!isAlreadyDone) {
+      try {
+        const raw = localStorage.getItem(timerStorageKey);
+        if (raw !== null) {
+          const parsed = Number.parseInt(raw, 10);
+          if (Number.isFinite(parsed) && parsed >= 0 && parsed <= totalSessionSeconds) {
+            restoredSeconds = parsed;
+            if (parsed === 0) {
+              timedOutOnLoad = true;
+            }
+          }
+        }
+      } catch {
+        // Ignore storage errors
+      }
+    }
+
+    const currentlyFullscreen =
+      typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false;
+
     setCurrentIndex(firstOpen >= 0 ? firstOpen : 0);
-    setRoundComplete(false);
+    setSessionSecondsLeft(restoredSeconds);
+    setSessionTimedOut(timedOutOnLoad);
+    setRoundComplete(timedOutOnLoad);
+    setQuestionSecondsLeft(SECONDS_PER_QUESTION);
     setHintPowerUpUsedInRound(false);
     setFiftyFiftyUsedInRound(false);
     setHintShownForQuestionId(null);
@@ -109,7 +177,14 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
     setSubmittedAttempt(null);
     setWarningToast(null);
     setIsPrivacyCurtainOpen(false);
-  }, [chapter.id]);
+    setFullscreenError(null);
+    setIsFullscreen(currentlyFullscreen);
+    wasNativeFullscreenRef.current = currentlyFullscreen;
+    setHasEnteredFocusGate(isAlreadyDone || currentlyFullscreen);
+    if (currentlyFullscreen) {
+      setFocusModeType('native');
+    }
+  }, [chapter.id, timerStorageKey, totalSessionSeconds]);
 
   const currentQuestion = questions[currentIndex];
 
@@ -121,30 +196,106 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
     setEliminatedOriginalIndices([]);
     setUsedAiOnCurrent(false);
     setReadCountdown(existing ? 0 : MIN_READ_SECONDS);
+    setQuestionSecondsLeft(existing ? 0 : SECONDS_PER_QUESTION);
   }, [currentQuestion?.id]);
 
-  // Countdown to prevent instant blind guessing on unanswered questions
+  // Countdown to prevent instant blind guessing on unanswered questions (pauses until Focus Gate entered & curtain closed)
   useEffect(() => {
-    if (submittedAttempt || roundComplete || readCountdown <= 0) return;
+    if (
+      !hasEnteredFocusGate ||
+      isPrivacyCurtainOpen ||
+      submittedAttempt ||
+      roundComplete ||
+      sessionTimedOut ||
+      readCountdown <= 0
+    ) {
+      return;
+    }
     const timer = window.setInterval(() => {
       setReadCountdown((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [submittedAttempt, roundComplete, readCountdown, currentQuestion?.id]);
+  }, [
+    hasEnteredFocusGate,
+    isPrivacyCurtainOpen,
+    submittedAttempt,
+    roundComplete,
+    sessionTimedOut,
+    readCountdown,
+    currentQuestion?.id,
+  ]);
+
+  // Accumulated session timer (3 menit × jumlah soal) & per-question 3-minute timer
+  useEffect(() => {
+    if (
+      !hasEnteredFocusGate ||
+      roundComplete ||
+      sessionTimedOut ||
+      allQuestionsAnswered ||
+      questions.length === 0
+    ) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setSessionSecondsLeft((prev) => {
+        const next = prev > 0 ? prev - 1 : 0;
+        try {
+          localStorage.setItem(timerStorageKey, String(next));
+        } catch {
+          // Ignore storage errors
+        }
+        if (next === 0) {
+          setSessionTimedOut(true);
+          setRoundComplete(true);
+        }
+        return next;
+      });
+
+      if (!submittedAttempt) {
+        setQuestionSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
+      }
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [
+    hasEnteredFocusGate,
+    roundComplete,
+    sessionTimedOut,
+    allQuestionsAnswered,
+    questions.length,
+    submittedAttempt,
+    timerStorageKey,
+  ]);
+
+  const handleRestartSessionTimer = () => {
+    try {
+      localStorage.setItem(timerStorageKey, String(totalSessionSeconds));
+    } catch {
+      // Ignore storage errors
+    }
+    const firstOpen = questions.findIndex((q) => !attempts[q.id]);
+    setCurrentIndex(firstOpen >= 0 ? firstOpen : 0);
+    setSessionSecondsLeft(totalSessionSeconds);
+    setQuestionSecondsLeft(SECONDS_PER_QUESTION);
+    setSessionTimedOut(false);
+    setRoundComplete(false);
+  };
 
   const shuffledOptions = useMemo(() => {
     if (!currentQuestion) return [];
     return deterministicShuffle(currentQuestion.options, `${currentQuestion.id}-v1`);
   }, [currentQuestion]);
 
-  // Anti-screenshot, privacy-curtain, and anti-copy-paste guards (logs silently without locking session)
+  // Anti-screenshot, privacy-curtain, minimize/tab-switch & fullscreen-exit guards
   useEffect(() => {
-    if (roundComplete || !currentQuestion) return;
+    if (!hasEnteredFocusGate || roundComplete || allQuestionsAnswered || !currentQuestion) return;
 
     const triggerViolation = (type: ViolationLog['type'], detail: string) => {
       const now = Date.now();
-      if (now - lastViolationAtRef.current < 1500) return;
-      lastViolationAtRef.current = now;
+      const lastForType = lastViolationByTypeRef.current[type] ?? 0;
+      if (now - lastForType < 1500) return;
+      lastViolationByTypeRef.current[type] = now;
 
       onRecordViolation({
         type,
@@ -162,24 +313,26 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        showCurtain('Tetap berada di tab kuis ya! Layar soal disembunyikan saat berpindah tab.');
+        showCurtain(
+          'Jendela latihan diperkecil (minimize) atau kamu berpindah tab. Layar soal disembunyikan.'
+        );
         triggerViolation(
           'tab-switch',
-          'Terdeteksi berpindah tab atau membuka aplikasi lain saat kuis.'
+          'Siswa mengganti tab, membuka aplikasi lain, atau memperkecil (minimize) jendela latihan.'
         );
-      } else if (document.hasFocus()) {
+      } else if (document.hasFocus() && (focusModeType !== 'native' || document.fullscreenElement)) {
         setIsPrivacyCurtainOpen(false);
       }
     };
 
     let blurTimer: number | null = null;
     const handleWindowBlur = () => {
-      showCurtain('Fokus layar berpindah keluar. Klik kembali jendela kuis untuk melanjutkan.');
+      showCurtain('Fokus layar berpindah keluar. Klik kembali ke layar latihan untuk melanjutkan.');
       blurTimer = window.setTimeout(() => {
-        if (!document.hasFocus()) {
+        if (!document.hasFocus() && !isUnmountingRef.current) {
           triggerViolation(
             'window-blur',
-            'Fokus layar berpindah keluar (kemungkinan split-screen atau alat bantu lain).'
+            'Fokus layar berpindah keluar dari jendela latihan (minimize, pindah aplikasi, atau split-screen).'
           );
         }
       }, 250);
@@ -190,7 +343,7 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
         window.clearTimeout(blurTimer);
         blurTimer = null;
       }
-      if (!document.hidden) {
+      if (!document.hidden && (focusModeType !== 'native' || document.fullscreenElement)) {
         setIsPrivacyCurtainOpen(false);
       }
     };
@@ -274,7 +427,22 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
     };
 
     const handleFullscreenChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      const active = Boolean(document.fullscreenElement);
+      setIsFullscreen(active);
+      if (active) {
+        wasNativeFullscreenRef.current = true;
+        if (!document.hidden) {
+          setIsPrivacyCurtainOpen(false);
+        }
+      } else if (wasNativeFullscreenRef.current && !isUnmountingRef.current) {
+        showCurtain(
+          'Kamu keluar dari Mode Layar Penuh. Aktifkan kembali Layar Penuh untuk melanjutkan soal.'
+        );
+        triggerViolation(
+          'fullscreen-exit',
+          'Siswa keluar dari Layar Penuh (Fullscreen) atau memperkecil layar di tengah sesi.'
+        );
+      }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -301,12 +469,50 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
       document.removeEventListener('keyup', handleKeyUp);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
-  }, [chapter.title, currentQuestion?.id, roundComplete, onRecordViolation]);
+  }, [
+    hasEnteredFocusGate,
+    focusModeType,
+    chapter.title,
+    currentQuestion?.id,
+    roundComplete,
+    allQuestionsAnswered,
+    onRecordViolation,
+  ]);
+
+  const enterFocusAndFullscreen = async () => {
+    setFullscreenError(null);
+    try {
+      if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      }
+      wasNativeFullscreenRef.current = Boolean(document.fullscreenElement);
+      setIsFullscreen(Boolean(document.fullscreenElement));
+      setFocusModeType('native');
+      setHasEnteredFocusGate(true);
+      setIsPrivacyCurtainOpen(false);
+    } catch {
+      setFullscreenError(
+        'Browser atau jendela pratinjau membatasi mode layar penuh otomatis. Kamu tetap bisa masuk dengan Mode Fokus Jendela (perpindahan tab & minimize tetap tercatat ke database guru).'
+      );
+    }
+  };
+
+  const enterWindowFocusFallback = () => {
+    setFullscreenError(null);
+    setFocusModeType('window');
+    wasNativeFullscreenRef.current = false;
+    setHasEnteredFocusGate(true);
+    setIsPrivacyCurtainOpen(false);
+  };
 
   const toggleFullscreen = async () => {
     try {
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen();
+        wasNativeFullscreenRef.current = true;
+        setIsFullscreen(true);
+        setFocusModeType('native');
+        setIsPrivacyCurtainOpen(false);
       } else {
         await document.exitFullscreen();
       }
@@ -318,13 +524,13 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
   if (!currentQuestion) {
     return (
       <div className="mx-auto max-w-[900px] px-6 py-12 text-center">
-        <p className="text-sm text-slate-600">Tidak ada soal pada dunia ini.</p>
+        <p className="text-sm text-slate-600">Tidak ada soal pada paket ini.</p>
         <button
           type="button"
           onClick={onExitToMap}
           className="mt-4 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
         >
-          Kembali ke Peta Dunia
+          Kembali ke Daftar Numerasi
         </button>
       </div>
     );
@@ -387,34 +593,39 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
     }
   };
 
-  // End-of-round Summary Screen
+  // End-of-session Summary Screen
   if (roundComplete) {
     const roundAttempts = questions.map((q) => attempts[q.id]).filter(Boolean);
-    const roundXp = roundAttempts.reduce((sum, a) => sum + a.earnedXp, 0);
-    const roundMaxXp = questions.reduce((sum, q) => sum + q.xp, 0);
+    const roundScore = roundAttempts.reduce((sum, a) => sum + a.earnedXp, 0);
+    const roundMaxScore = questions.reduce((sum, q) => sum + q.xp, 0);
     const roundCorrect = roundAttempts.filter((a) => a.isCorrect).length;
     const accuracy = Math.round((roundCorrect / questions.length) * 100);
+    const sessionMinutes = questions.length * MINUTES_PER_QUESTION;
 
     return (
       <div className="mx-auto max-w-[820px] px-6 py-10">
         <div className="rounded-2xl border border-slate-200 bg-white p-7 md:p-9 space-y-6">
           <div className="space-y-2 border-b border-slate-100 pb-5">
-            <p className="text-xs font-bold text-emerald-700">
-              {chapter.orderLabel} · Ronde Selesai
+            <p className={`text-xs font-bold ${sessionTimedOut ? 'text-amber-700' : 'text-emerald-700'}`}>
+              {chapter.orderLabel} · {sessionTimedOut ? `Waktu Sesi Berakhir (${sessionMinutes} Menit)` : 'Sesi Latihan Selesai'}
             </p>
             <h2 className="text-2xl md:text-3xl font-extrabold text-slate-950">
-              Bagus! {chapter.title} Tuntas
+              {sessionTimedOut
+                ? `Waktu ${sessionMinutes} Menit Telah Habis`
+                : `${chapter.title} Selesai`}
             </h2>
             <p className="text-sm text-slate-600">
-              Kamu sudah menyelesaikan seluruh soal pada dunia ini.
+              {sessionTimedOut
+                ? `Kamu berhasil mengerjakan ${roundAttempts.length} dari ${questions.length} soal dalam alokasi waktu ${sessionMinutes} menit.`
+                : `Kamu sudah menyelesaikan seluruh soal pada paket ini.`}
             </p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-xs text-slate-500">XP Diperoleh</div>
+              <div className="text-xs text-slate-500">Skor Diperoleh</div>
               <div className="mt-1 font-mono text-2xl font-bold text-sky-700 tabular-nums">
-                {roundXp} <span className="text-sm font-normal text-slate-400">/ {roundMaxXp}</span>
+                {roundScore} <span className="text-sm font-normal text-slate-400">/ {roundMaxScore} poin</span>
               </div>
             </div>
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -437,80 +648,288 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
               onClick={onExitToMap}
               className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors"
             >
-              Kembali ke Peta Dunia
+              Kembali ke Daftar Numerasi
             </button>
-            {onNextWorld && (
-              <button
-                type="button"
-                onClick={onNextWorld}
-                className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 transition-colors"
-              >
-                <span>Lanjut ke Dunia Berikutnya</span>
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            )}
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              {sessionTimedOut && roundAttempts.length < questions.length && (
+                <button
+                  type="button"
+                  onClick={handleRestartSessionTimer}
+                  className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900 hover:bg-amber-100 transition-colors"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  <span>Atur Ulang Waktu ({sessionMinutes} Menit)</span>
+                </button>
+              )}
+
+              {onNextWorld && (
+                <button
+                  type="button"
+                  onClick={onNextWorld}
+                  className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 transition-colors"
+                >
+                  <span>Lanjut ke Paket Berikutnya</span>
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  const currentStep = submittedAttempt ? 2 : 1;
+  // Pre-Start Fullscreen / Mode Fokus Gate (wajib sebelum soal & timer dimulai)
+  if (!hasEnteredFocusGate && !allQuestionsAnswered && !roundComplete) {
+    const sessionMinutes = questions.length * MINUTES_PER_QUESTION;
+    return (
+      <div className="mx-auto max-w-[760px] px-6 py-10">
+        <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+          <div className="bg-slate-900 text-white px-6 py-5 md:px-8 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-sky-300">
+              <span>{chapter.orderLabel}</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="font-mono tabular-nums">{questions.length} Soal</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
+              <span className="font-mono tabular-nums">Durasi {sessionMinutes} Menit</span>
+            </div>
+            <h2 className="text-xl md:text-2xl font-extrabold text-white">{chapter.title}</h2>
+            <p className="text-xs md:text-sm text-slate-300">
+              Peserta: <strong className="text-white">{studentName || 'Siswa Kelas 6'}</strong>
+            </p>
+          </div>
+
+          <div className="p-6 md:p-8 space-y-6">
+            <div className="flex items-start gap-3.5 rounded-xl border border-sky-200 bg-sky-50/90 p-4">
+              <Maximize2 className="h-5 w-5 text-sky-700 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-sky-950">
+                  Aktifkan Layar Penuh &amp; Mode Fokus Sebelum Mulai
+                </h3>
+                <p className="text-xs md:text-sm text-sky-900 leading-relaxed">
+                  Latihan baru akan terbuka dan waktu <strong>{sessionMinutes} menit</strong> baru berjalan setelah kamu masuk ke layar penuh.
+                </p>
+              </div>
+            </div>
+
+            <ol className="space-y-3 text-sm text-slate-700">
+              <li className="flex items-start gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 font-mono text-xs font-bold text-white">
+                  1
+                </span>
+                <span className="pt-0.5 leading-relaxed">
+                  Siapkan <strong>kertas coretan dan pensil</strong> sebelum menekan tombol mulai.
+                </span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 font-mono text-xs font-bold text-white">
+                  2
+                </span>
+                <span className="pt-0.5 leading-relaxed">
+                  Gunakan <strong>3 menit per soal</strong> secara tenang. Soal pertama terbuka setelah jeda baca 6 detik.
+                </span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 font-mono text-xs font-bold text-white">
+                  3
+                </span>
+                <span className="pt-0.5 leading-relaxed">
+                  Selama latihan, <strong>ganti tab, memperkecil (minimize) layar, keluar dari layar penuh, atau tombol screenshot</strong> otomatis tercatat ke log guru.
+                </span>
+              </li>
+            </ol>
+
+            {fullscreenError && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3 text-xs md:text-sm text-amber-950">
+                <p className="leading-relaxed">{fullscreenError}</p>
+                <button
+                  type="button"
+                  onClick={enterWindowFocusFallback}
+                  className="inline-flex items-center gap-2 rounded-xl border border-amber-400 bg-white px-4 py-2.5 text-xs font-bold text-amber-950 hover:bg-amber-100 transition-colors whitespace-nowrap"
+                >
+                  <ShieldCheck className="h-4 w-4 text-amber-700" />
+                  <span>Mulai dengan Mode Fokus Jendela</span>
+                </button>
+              </div>
+            )}
+
+            <div className="border-t border-slate-100 pt-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={onExitToMap}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
+              >
+                Kembali ke Daftar Numerasi
+              </button>
+
+              <button
+                type="button"
+                onClick={enterFocusAndFullscreen}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-6 py-3.5 text-sm font-bold text-white hover:bg-sky-700 transition-colors shadow-sm whitespace-nowrap"
+              >
+                <Maximize2 className="h-4 w-4 shrink-0" />
+                <span>Aktifkan Layar Penuh &amp; Mulai Latihan</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Active stage: 1 = Baca Soal (while 6s read countdown active), 2 = Pilih Jawaban, 3 = Pelajari Pembahasan
+  const activeStage: 1 | 2 | 3 = submittedAttempt ? 3 : readCountdown > 0 ? 1 : 2;
   const progressPct = Math.round(((currentIndex + 1) / questions.length) * 100);
-  const watermarkLabel = `${studentName || 'Siswa'} · ${studentId.slice(-5) || 'K5'} · ${currentQuestion.numberLabel}`;
+  const watermarkLabel = `${studentName || 'Siswa'} · ${studentId.slice(-5) || 'K6'} · ${currentQuestion.numberLabel}`;
+  const isSessionUrgent = !allQuestionsAnswered && sessionSecondsLeft <= 60;
+  const isSessionWarning = !allQuestionsAnswered && !isSessionUrgent && sessionSecondsLeft <= 180;
 
   return (
     <div className="mx-auto max-w-[1200px] px-6 py-6 space-y-5 anti-copy-print-hide">
-      {/* Calm, uncluttered Progress & Focus Header */}
-      <div className="rounded-xl border border-slate-200 bg-white px-5 py-3.5 space-y-2.5">
+      {/* Zone 0: Dark Slate Session Context Frame (distinct from light background & workspace) */}
+      <div className="rounded-2xl bg-slate-900 text-white px-5 py-4 md:px-6 space-y-3 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-xs md:text-sm">
-            <span className={chapter.isBoss ? 'font-bold text-rose-700' : 'font-bold text-sky-700'}>
+            <span className={chapter.isEvaluation ? 'font-bold text-rose-300' : 'font-bold text-sky-300'}>
               {chapter.orderLabel}
             </span>
-            <span aria-hidden="true" className="text-slate-300">·</span>
-            <span className="font-semibold text-slate-900">{chapter.title}</span>
-            <span aria-hidden="true" className="text-slate-300">·</span>
-            <span className="font-mono text-xs text-slate-600 tabular-nums">
+            <span aria-hidden="true" className="text-slate-600">·</span>
+            <span className="font-semibold text-white">{chapter.title}</span>
+            <span aria-hidden="true" className="text-slate-600">·</span>
+            <span className="font-mono text-xs text-slate-300 tabular-nums">
               Soal {currentIndex + 1} dari {questions.length}
             </span>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            {/* Accumulated Session Timer (3 menit × jumlah soal) */}
             <span
-              className={`inline-flex items-center gap-1.5 text-xs font-medium ${
-                violations.length > 0 ? 'text-amber-700' : 'text-slate-500'
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-xs font-semibold tabular-nums ${
+                allQuestionsAnswered
+                  ? 'border-emerald-500/40 bg-emerald-950/70 text-emerald-200'
+                  : isSessionUrgent
+                    ? 'border-red-400 bg-red-950/90 text-red-200'
+                    : isSessionWarning
+                      ? 'border-amber-400 bg-amber-950/90 text-amber-200'
+                      : 'border-slate-700 bg-slate-800 text-slate-100'
               }`}
             >
-              <ShieldCheck className={`h-3.5 w-3.5 ${violations.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`} />
-              <span>{violations.length > 0 ? `${violations.length} Catatan Fokus` : 'Mode Fokus Aktif'}</span>
+              <Clock className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                {allQuestionsAnswered
+                  ? `Sesi Selesai (${questions.length * MINUTES_PER_QUESTION} mnt)`
+                  : `Sisa Sesi: ${formatMmSs(sessionSecondsLeft)} / ${formatMmSs(totalSessionSeconds)}`}
+              </span>
             </span>
 
-            <button
-              type="button"
-              onClick={toggleFullscreen}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
-              title="Layar Penuh"
+            <span
+              className={`inline-flex items-center gap-1.5 text-xs font-medium ${
+                violations.length > 0 ? 'text-amber-300' : 'text-slate-300'
+              }`}
             >
-              {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-              <span className="hidden sm:inline">{isFullscreen ? 'Keluar Layar Penuh' : 'Layar Penuh'}</span>
-            </button>
+              <ShieldCheck
+                className={`h-3.5 w-3.5 ${violations.length > 0 ? 'text-amber-400' : 'text-emerald-400'}`}
+              />
+              <span>{violations.length > 0 ? `${violations.length} Catatan Fokus` : 'Mode Fokus'}</span>
+            </span>
+
+            {isFullscreen && !allQuestionsAnswered ? (
+              <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-950/70 px-2.5 py-1.5 text-xs font-medium text-emerald-200 whitespace-nowrap">
+                <Maximize2 className="h-3.5 w-3.5 shrink-0" />
+                <span className="hidden sm:inline">Layar Penuh Aktif</span>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700 transition-colors whitespace-nowrap"
+                title="Layar Penuh"
+              >
+                {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                <span className="hidden sm:inline">{isFullscreen ? 'Keluar Layar Penuh' : 'Layar Penuh'}</span>
+              </button>
+            )}
           </div>
         </div>
 
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
           <div
-            className="h-full bg-sky-600 transition-all duration-300"
+            className="h-full bg-sky-400 transition-all duration-300"
             style={{ width: `${progressPct}%` }}
           />
         </div>
+      </div>
+
+      {/* Sequential 3-Stage Stepper Bar with Color Separation */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+        {[
+          {
+            step: 1 as const,
+            label: '1. Baca & Pahami Soal',
+            sublabel: 'Cermati konteks & angka',
+            activeCls: 'bg-sky-600 text-white border-sky-700 shadow-sm',
+            doneCls: 'bg-sky-50 text-sky-900 border-sky-200',
+            subActiveCls: 'text-sky-100',
+            subDoneCls: 'text-sky-700',
+          },
+          {
+            step: 2 as const,
+            label: '2. Hitung & Pilih Jawaban',
+            sublabel: 'Coret di kertas lalu kirim',
+            activeCls: 'bg-indigo-600 text-white border-indigo-700 shadow-sm',
+            doneCls: 'bg-indigo-50 text-indigo-900 border-indigo-200',
+            subActiveCls: 'text-indigo-100',
+            subDoneCls: 'text-indigo-700',
+          },
+          {
+            step: 3 as const,
+            label: '3. Pelajari Pembahasan',
+            sublabel: 'Cek langkah & pengecoh',
+            activeCls: 'bg-emerald-600 text-white border-emerald-700 shadow-sm',
+            doneCls: 'bg-emerald-50 text-emerald-900 border-emerald-200',
+            subActiveCls: 'text-emerald-100',
+            subDoneCls: 'text-emerald-700',
+          },
+        ].map((item) => {
+          const isActive = activeStage === item.step;
+          const isDone = activeStage > item.step;
+          return (
+            <div
+              key={item.step}
+              className={`rounded-xl border px-4 py-2.5 transition-colors flex items-center justify-between gap-2 ${
+                isActive
+                  ? item.activeCls
+                  : isDone
+                    ? item.doneCls
+                    : 'bg-white text-slate-400 border-slate-200'
+              }`}
+            >
+              <div>
+                <div className="font-bold">{item.label}</div>
+                <div
+                  className={`text-[11px] ${
+                    isActive
+                      ? item.subActiveCls
+                      : isDone
+                        ? item.subDoneCls
+                        : 'text-slate-400'
+                  }`}
+                >
+                  {item.sublabel}
+                </div>
+              </div>
+              {isDone && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+            </div>
+          );
+        })}
       </div>
 
       {/* Gentle warning banner if triggered */}
       {warningToast && (
         <div
           role="alert"
-          className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-3 flex items-center justify-between gap-4 text-xs md:text-sm text-amber-900"
+          className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-3 flex items-center justify-between gap-4 text-xs md:text-sm text-amber-950"
         >
           <div className="flex items-center gap-2.5">
             <ShieldAlert className="h-4.5 w-4.5 text-amber-600 shrink-0" />
@@ -528,29 +947,17 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
         </div>
       )}
 
-      {/* Main Content Layout: Focused Left Question Card + Calm Collapsible AI Helper */}
+      {/* Main Content Layout: Color-Separated Left Sequential Stages + Right Support Rail */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <section
-          className="relative overflow-hidden lg:col-span-8 rounded-2xl border border-slate-200 bg-white p-6 md:p-8 space-y-6 anti-copy"
+        <div
+          className="relative lg:col-span-8 space-y-5 anti-copy"
           onCopy={(e) => e.preventDefault()}
           onCut={(e) => e.preventDefault()}
           onDragStart={(e) => e.preventDefault()}
         >
-          {/* Subtle student identity watermark across the question workspace to deter screenshots & phone photos */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none select-none absolute inset-0 overflow-hidden opacity-[0.045] flex flex-wrap items-center justify-around gap-10 -rotate-12 scale-110 z-0"
-          >
-            {Array.from({ length: 8 }).map((_, idx) => (
-              <span key={idx} className="font-mono text-xs font-bold tracking-wider text-slate-900 whitespace-nowrap">
-                {watermarkLabel}
-              </span>
-            ))}
-          </div>
-
-          {/* Privacy Curtain Overlay when tab/window loses focus or screenshot key is pressed */}
+          {/* Privacy Curtain Overlay when tab/window loses focus, exits fullscreen, or screenshot key is pressed */}
           {isPrivacyCurtainOpen && (
-            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-900/95 backdrop-blur-md p-6 text-center text-white space-y-4">
+            <div className="absolute inset-0 z-30 rounded-2xl flex flex-col items-center justify-center bg-slate-900/95 backdrop-blur-md p-6 text-center text-white space-y-4">
               <ShieldAlert className="h-10 w-10 text-amber-400" />
               <div className="space-y-1.5 max-w-md">
                 <h3 className="text-lg font-bold">Soal Disembunyikan Sementara</h3>
@@ -560,47 +967,51 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setIsPrivacyCurtainOpen(false)}
-                className="rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-sky-500 transition-colors"
+                onClick={() => {
+                  if (focusModeType === 'native' && !document.fullscreenElement) {
+                    void enterFocusAndFullscreen();
+                  } else {
+                    setIsPrivacyCurtainOpen(false);
+                  }
+                }}
+                className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-sky-500 transition-colors"
               >
-                Kembali Fokus ke Soal
+                {focusModeType === 'native' && !isFullscreen && (
+                  <Maximize2 className="h-4 w-4 shrink-0" />
+                )}
+                <span>
+                  {focusModeType === 'native' && !isFullscreen
+                    ? 'Aktifkan Layar Penuh & Lanjutkan'
+                    : 'Kembali Fokus ke Soal'}
+                </span>
               </button>
             </div>
           )}
 
-          <div className="relative z-10 space-y-6">
-            {/* Clean 2-Step Indicator */}
-            <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-50 border border-slate-200 p-1.5 text-xs">
-              {[
-                { step: 1, label: '1. Baca & Pilih Jawaban' },
-                { step: 2, label: '2. Pelajari Pembahasan' },
-              ].map((item) => {
-                const isActive = currentStep === item.step;
-                const isDone = currentStep > item.step;
-                return (
-                  <div
-                    key={item.step}
-                    className={`rounded-lg px-3 py-2 text-center font-semibold transition-colors ${
-                      isActive
-                        ? 'bg-white text-sky-700 shadow-sm border border-sky-200'
-                        : isDone
-                          ? 'text-emerald-700'
-                          : 'text-slate-400'
-                    }`}
-                  >
-                    {item.label}
-                  </div>
-                );
-              })}
+          {/* TAHAP 1: ZONA KONTEKS SOAL (Soft Sky Surface) */}
+          <section className="relative overflow-hidden rounded-2xl border border-sky-200 bg-sky-50/80 shadow-sm">
+            {/* Subtle student identity watermark */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none select-none absolute inset-0 overflow-hidden opacity-[0.04] flex flex-wrap items-center justify-around gap-10 -rotate-12 scale-110 z-0"
+            >
+              {Array.from({ length: 6 }).map((_, idx) => (
+                <span
+                  key={idx}
+                  className="font-mono text-xs font-bold tracking-wider text-slate-900 whitespace-nowrap"
+                >
+                  {watermarkLabel}
+                </span>
+              ))}
             </div>
 
-            {/* Question Metadata & Power-ups */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
-              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                <span className="font-mono font-bold text-slate-900">
-                  {currentQuestion.numberLabel}
-                </span>
-                <span aria-hidden="true">·</span>
+            {/* Sky Context Header Strip */}
+            <div className="relative z-10 bg-sky-100/80 border-b border-sky-200 px-6 py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-sky-950">
+                <span className="font-bold text-sky-800">Tahap 1 · Konteks Soal</span>
+                <span aria-hidden="true" className="text-sky-300">·</span>
+                <span className="font-mono font-bold">{currentQuestion.numberLabel}</span>
+                <span aria-hidden="true" className="text-sky-300">·</span>
                 <span
                   className={`font-semibold ${
                     currentQuestion.level === 'Sulit'
@@ -610,67 +1021,49 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
                         : 'text-emerald-700'
                   }`}
                 >
-                  Level {currentQuestion.level}
+                  Tingkat {currentQuestion.level}
                 </span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono font-semibold text-sky-700 tabular-nums">
-                  +{currentQuestion.xp} XP
-                </span>
-                {currentQuestion.isErrorHunt && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span className="inline-flex items-center gap-1 font-bold text-rose-700">
-                      <Search className="h-3.5 w-3.5" />
-                      Cari Kesalahannya
-                    </span>
-                  </>
-                )}
+                <span aria-hidden="true" className="text-sky-300">·</span>
+                <span className="font-mono font-semibold tabular-nums">{currentQuestion.xp} poin</span>
               </div>
 
               {!submittedAttempt && (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={hintPowerUpUsedInRound}
-                    onClick={handleUseHintPowerUp}
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                      hintPowerUpUsedInRound
-                        ? 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
-                        : 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100'
-                    }`}
-                  >
-                    <HelpCircle className="h-3.5 w-3.5" />
-                    <span>Petunjuk ({hintPowerUpUsedInRound ? '0' : '1'}x)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={fiftyFiftyUsedInRound}
-                    onClick={handleUseFiftyFifty}
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                      fiftyFiftyUsedInRound
-                        ? 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
-                        : 'border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100'
-                    }`}
-                  >
-                    <EyeOff className="h-3.5 w-3.5" />
-                    <span>50:50 ({fiftyFiftyUsedInRound ? '0' : '1'}x)</span>
-                  </button>
-                </div>
+                <span
+                  className={`inline-flex items-center gap-1 font-mono font-semibold tabular-nums ${
+                    questionSecondsLeft === 0
+                      ? 'text-amber-800'
+                      : questionSecondsLeft <= 30
+                        ? 'text-red-700'
+                        : 'text-sky-900'
+                  }`}
+                >
+                  <Clock className="h-3.5 w-3.5 shrink-0" />
+                  {questionSecondsLeft > 0
+                    ? `Waktu Soal: ${formatMmSs(questionSecondsLeft)} / 03:00`
+                    : 'Melebihi 3 mnt (pakai sisa sesi)'}
+                </span>
               )}
             </div>
 
-            {/* Question Prompt */}
-            <div className="space-y-4">
-              <h2 className="text-xl md:text-2xl font-bold text-slate-950">
-                {currentQuestion.title}
-              </h2>
+            {/* Question Content */}
+            <div className="relative z-10 p-6 md:p-7 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-xl md:text-2xl font-extrabold text-slate-950">
+                  {currentQuestion.title}
+                </h2>
+                {currentQuestion.isErrorHunt && (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-rose-700">
+                    <Search className="h-3.5 w-3.5" />
+                    Analisis Kesalahan
+                  </span>
+                )}
+              </div>
 
               {currentQuestion.isErrorHunt && currentQuestion.studentClaim && (
-                <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-4 space-y-1">
+                <div className="border-t border-b border-rose-200 bg-rose-50/90 -mx-6 md:-mx-7 px-6 md:px-7 py-4 space-y-1">
                   <div className="text-xs font-bold text-rose-800 flex items-center gap-1.5">
                     <Search className="h-3.5 w-3.5" />
-                    <span>Periksa Pernyataan Teman Ini:</span>
+                    <span>Pernyataan yang Perlu Diperiksa Kesalahannya:</span>
                   </div>
                   <p className="text-sm font-medium text-slate-900 leading-relaxed">
                     {currentQuestion.studentClaim}
@@ -678,32 +1071,28 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
                 </div>
               )}
 
-              <p className="text-base md:text-[17px] text-slate-800 leading-relaxed font-medium">
+              <p className="text-base md:text-[17px] text-slate-900 leading-relaxed font-medium">
                 {currentQuestion.questionText}
               </p>
             </div>
+          </section>
 
-            {/* Power-up Hint Display */}
-            {hintShownForQuestionId === currentQuestion.id && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-1">
-                <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
-                  <Sparkles className="h-3.5 w-3.5 text-amber-600" />
-                  <span>Petunjuk Langkah Pertama:</span>
-                </div>
-                <p className="text-sm text-amber-950 leading-relaxed">
-                  {currentQuestion.steps[0]}
-                </p>
-              </div>
-            )}
-
-            {/* Direct Multiple-Choice Options */}
-            <div className="space-y-3 pt-1">
-              <div className="text-xs font-bold text-slate-700">
+          {/* TAHAP 2: ZONA PILIHAN JAWABAN & AKSI KIRIM (Crisp White + Indigo Header Strip) */}
+          <section className="rounded-2xl border border-indigo-200 bg-white overflow-hidden shadow-sm">
+            <div className="bg-indigo-50/90 border-b border-indigo-200/80 px-6 py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="font-bold text-indigo-900">
                 {submittedAttempt
-                  ? 'Pilihan Jawaban:'
-                  : 'Hitung di kertas coretanmu, lalu pilih jawaban yang paling tepat:'}
-              </div>
+                  ? 'Tahap 2 · Jawaban Terkirim'
+                  : 'Tahap 2 · Hitung di Kertas Coretan, Lalu Pilih Jawaban'}
+              </span>
+              {!submittedAttempt && readCountdown > 0 && (
+                <span className="font-mono font-semibold text-indigo-700 tabular-nums">
+                  Waktu baca: {readCountdown} dtk
+                </span>
+              )}
+            </div>
 
+            <div className="p-6 md:p-7 space-y-4">
               <div className="space-y-2.5">
                 {shuffledOptions.map((opt, displayIdx) => {
                   const letter = String.fromCharCode(65 + displayIdx);
@@ -716,7 +1105,7 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
                     submittedAttempt && opt.originalIndex === submittedAttempt.selectedIndex;
 
                   let buttonStyle =
-                    'border-slate-200 bg-white text-slate-800 hover:border-sky-400 hover:bg-sky-50/40';
+                    'border-slate-200 bg-white text-slate-800 hover:border-indigo-400 hover:bg-indigo-50/40';
                   if (isEliminated) {
                     buttonStyle =
                       'border-slate-200 bg-slate-100 text-slate-400 line-through opacity-50 cursor-not-allowed';
@@ -730,7 +1119,8 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
                       buttonStyle = 'border-slate-200 bg-slate-50/70 text-slate-500';
                     }
                   } else if (isSelected) {
-                    buttonStyle = 'border-sky-600 bg-sky-50 text-slate-950 font-semibold ring-1 ring-sky-600';
+                    buttonStyle =
+                      'border-indigo-600 bg-indigo-50 text-slate-950 font-semibold ring-1 ring-indigo-600';
                   }
 
                   return (
@@ -748,7 +1138,7 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
                             : isSubmitted && isChosenOption && !submittedAttempt?.isCorrect
                               ? 'bg-red-600 text-white border-red-600'
                               : isSelected
-                                ? 'bg-sky-600 text-white border-sky-600'
+                                ? 'bg-indigo-600 text-white border-indigo-600'
                                 : 'bg-slate-100 text-slate-700 border-slate-200'
                         }`}
                       >
@@ -761,101 +1151,162 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
               </div>
 
               {!submittedAttempt && (
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
-                  <p className="text-xs text-slate-500 flex items-center gap-1.5">
-                    <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                <div className="border-t border-slate-100 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <p className="text-xs text-slate-600 flex items-center gap-1.5 leading-relaxed">
+                    <Clock className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
                     <span>
                       {readCountdown > 0
-                        ? `Baca soal dan hitung dulu dengan teliti (${readCountdown} detik)...`
-                        : 'Cek kembali pilihanmu supaya tidak terjebak angka pengecoh.'}
+                        ? `Tahap 1: Baca soal dengan teliti (${readCountdown} detik) sebelum memilih.`
+                        : selectedDisplayIdx === null
+                          ? 'Pilih salah satu opsi A, B, C, atau D berdasarkan hitunganmu.'
+                          : 'Periksa kembali angka dan satuannya, lalu klik Kirim Jawaban.'}
                     </span>
                   </p>
                   <button
                     type="button"
                     disabled={selectedDisplayIdx === null || readCountdown > 0}
                     onClick={handleSubmitAnswer}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-6 py-3 text-sm font-bold text-white hover:bg-sky-700 transition-colors disabled:opacity-40 whitespace-nowrap shrink-0"
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-7 py-3.5 text-sm font-bold text-white hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-40 whitespace-nowrap shrink-0"
                   >
                     <span>
-                      {readCountdown > 0 ? `Tunggu ${readCountdown} dtk` : 'Kirim Jawaban'}
+                      {readCountdown > 0 ? `Baca Soal (${readCountdown} dtk)` : 'Kirim Jawaban'}
                     </span>
                     <ArrowRight className="h-4 w-4" />
                   </button>
                 </div>
               )}
             </div>
+          </section>
 
-            {/* Post-Answer Review */}
-            {submittedAttempt && (
-              <div className="space-y-4 border-t border-slate-200 pt-5">
-                <div
-                  className={`rounded-xl border p-4 flex items-start gap-3 ${
-                    submittedAttempt.isCorrect
-                      ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
-                      : 'border-red-200 bg-red-50 text-red-950'
-                  }`}
-                >
-                  {submittedAttempt.isCorrect ? (
-                    <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <XCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
-                  )}
-                  <div className="space-y-1">
-                    <div className="text-sm font-bold">
-                      {submittedAttempt.isCorrect
-                        ? `Hebat! Jawabanmu benar (+${submittedAttempt.earnedXp} XP).`
-                        : 'Belum tepat, tidak apa-apa! Yuk lihat cara yang benar di bawah ini.'}
-                    </div>
-                    <div className="text-xs text-slate-700">
-                      <strong>Jawaban Benar:</strong> {currentQuestion.finalAnswer}
-                    </div>
+          {/* TAHAP 3: ZONA PEMBAHASAN LANGKAH DEMI LANGKAH (Emerald / Amber Semantic Band) */}
+          {submittedAttempt && (
+            <section
+              className={`rounded-2xl border overflow-hidden shadow-sm ${
+                submittedAttempt.isCorrect ? 'border-emerald-300 bg-white' : 'border-amber-300 bg-white'
+              }`}
+            >
+              <div
+                className={`px-6 py-4 flex items-start gap-3 text-white ${
+                  submittedAttempt.isCorrect ? 'bg-emerald-600' : 'bg-amber-600'
+                }`}
+              >
+                {submittedAttempt.isCorrect ? (
+                  <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5" />
+                ) : (
+                  <XCircle className="h-5 w-5 shrink-0 mt-0.5" />
+                )}
+                <div className="space-y-0.5">
+                  <div className="text-sm font-bold">
+                    {submittedAttempt.isCorrect
+                      ? `Tahap 3 · Jawaban Benar (+${submittedAttempt.earnedXp} poin)`
+                      : 'Tahap 3 · Jawaban Belum Tepat — Pelajari Langkahnya'}
+                  </div>
+                  <div className="text-xs text-white/90">
+                    <strong>Jawaban Benar:</strong> {currentQuestion.finalAnswer}
                   </div>
                 </div>
+              </div>
 
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3 text-xs md:text-sm">
-                  <div>
-                    <div className="font-bold text-slate-900 mb-1.5">Cara Mengerjakannya:</div>
-                    <ol className="list-decimal pl-5 space-y-1 text-slate-700 leading-relaxed">
-                      {currentQuestion.steps.map((step, i) => (
-                        <li key={i}>{step}</li>
-                      ))}
-                    </ol>
+              <div className="p-6 md:p-7 space-y-4">
+                <div>
+                  <div className="text-xs md:text-sm font-bold text-slate-900 mb-2">
+                    Langkah Penyelesaian:
                   </div>
-
-                  <div className="border-t border-slate-200/80 pt-2.5 text-amber-900">
-                    <strong>Ingat Jebakannya:</strong> {currentQuestion.trapWarning}
-                  </div>
+                  <ol className="list-decimal pl-5 space-y-1.5 text-xs md:text-sm text-slate-700 leading-relaxed">
+                    {currentQuestion.steps.map((step, i) => (
+                      <li key={i}>{step}</li>
+                    ))}
+                  </ol>
                 </div>
 
-                <div className="flex justify-end">
+                <div className="border-t border-amber-200 bg-amber-50/80 -mx-6 md:-mx-7 px-6 md:px-7 py-3.5 text-xs md:text-sm text-amber-950">
+                  <strong>Perhatikan Angka Pengecoh:</strong> {currentQuestion.trapWarning}
+                </div>
+
+                <div className="pt-1 flex justify-end">
                   <button
                     type="button"
                     onClick={handleNextQuestion}
-                    className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800 transition-colors"
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3.5 text-sm font-bold text-white hover:bg-emerald-700 transition-colors shadow-sm"
                   >
                     <span>
                       {currentIndex + 1 < questions.length
                         ? 'Lanjut ke Soal Berikutnya'
-                        : 'Lihat Hasil Ronde'}
+                        : 'Lihat Hasil Sesi'}
                     </span>
                     <ArrowRight className="h-4 w-4" />
                   </button>
                 </div>
               </div>
-            )}
-          </div>
-        </section>
+            </section>
+          )}
+        </div>
 
-        {/* Right Zone: Collapsed-by-default AI Helper + Quick Question Navigator */}
+        {/* Right Zone: Optional Helpers (Warm Amber) + Collapsed AI Tutor + Question Navigator */}
         <div className="lg:col-span-4 space-y-4">
+          {!submittedAttempt && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-5 space-y-3">
+              <div>
+                <h3 className="text-xs font-bold text-amber-950">Alat Bantu Soal (Opsional)</h3>
+                <p className="text-[11px] text-amber-900/80 mt-0.5">
+                  Dipakai hanya jika kamu benar-benar buntu.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={hintPowerUpUsedInRound}
+                  onClick={handleUseHintPowerUp}
+                  className={`inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
+                    hintPowerUpUsedInRound
+                      ? 'border-slate-200 bg-white/60 text-slate-400 cursor-not-allowed'
+                      : 'border-amber-300 bg-white text-amber-950 hover:bg-amber-100'
+                  }`}
+                >
+                  <HelpCircle className="h-3.5 w-3.5 shrink-0" />
+                  <span>Petunjuk ({hintPowerUpUsedInRound ? '0' : '1'}x)</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={fiftyFiftyUsedInRound}
+                  onClick={handleUseFiftyFifty}
+                  className={`inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
+                    fiftyFiftyUsedInRound
+                      ? 'border-slate-200 bg-white/60 text-slate-400 cursor-not-allowed'
+                      : 'border-sky-300 bg-white text-sky-900 hover:bg-sky-50'
+                  }`}
+                >
+                  <EyeOff className="h-3.5 w-3.5 shrink-0" />
+                  <span>Eliminasi 2 ({fiftyFiftyUsedInRound ? '0' : '1'}x)</span>
+                </button>
+              </div>
+
+              {hintShownForQuestionId === currentQuestion.id && (
+                <div className="border-t border-amber-200 pt-3 space-y-1">
+                  <div className="text-xs font-bold text-amber-950">Petunjuk Langkah Pertama:</div>
+                  <p className="text-xs text-amber-950 leading-relaxed">
+                    {currentQuestion.steps[0]}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           <AiScaffoldPanel
             studentId={studentId}
             question={currentQuestion}
             onUsedScaffold={() => setUsedAiOnCurrent(true)}
           />
 
-          <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-            <div className="text-xs font-bold text-slate-800">Nomor Soal di Dunia Ini</div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold text-slate-800">Daftar Nomor Soal</div>
+              <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                {questions.length * MINUTES_PER_QUESTION} mnt total
+              </span>
+            </div>
             <div className="flex flex-wrap gap-1.5">
               {questions.map((q, idx) => {
                 const att = attempts[q.id];
@@ -879,6 +1330,13 @@ export const QuizArena: React.FC<QuizArenaProps> = ({
                   </button>
                 );
               })}
+            </div>
+            <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+              <span>Hitam: Aktif</span>
+              <span aria-hidden="true">·</span>
+              <span className="text-emerald-700 font-medium">Hijau: Benar</span>
+              <span aria-hidden="true">·</span>
+              <span className="text-red-700 font-medium">Merah: Salah</span>
             </div>
           </div>
         </div>

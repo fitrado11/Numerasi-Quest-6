@@ -28,8 +28,8 @@ export interface WorldChapter {
   title: string;
   subtitle: string;
   topic: string;
-  isBoss?: boolean;
-  bossVersion?: 'A' | 'B';
+  isEvaluation?: boolean;
+  evaluationVersion?: 'A' | 'B';
   introTitle: string;
   introPoints: string[];
   accentColor: 'sky' | 'emerald' | 'amber' | 'indigo' | 'rose';
@@ -88,4 +88,10 @@ export interface StudentSummary {
   attemptCount: number;
   violationCount: number;
   updatedAt: string;
+}
+
+export interface TeacherViolationEntry extends ViolationLog {
+  studentId: string;
+  studentName: string;
+  studentClass: string;
 }
